@@ -1,14 +1,3 @@
----
-output:
-  word_document: default
-  html_document: default
-  pdf_document: default
----
----
-title: "Realized and potential distribution of broadleaved trees species"
-author: "Lima, JS"
-date: "04/04/2022"
-output: html_document
 
 ### Realized and potential distribution of broadleaved trees at their northern range limits: towards climate change adaptation
 
