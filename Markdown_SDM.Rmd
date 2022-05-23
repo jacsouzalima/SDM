@@ -1,0 +1,208 @@
+---
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+---
+title: "Realized and potential distribution of broadleaved trees species"
+author: "Lima, JS"
+date: "04/04/2022"
+output: html_document
+
+### Realized and potential distribution of broadleaved trees at their northern range limits: towards climate change adaptation
+
+##### Predictors variables
+- (1) decadal average (2000–2010) of growing degree day (base 5°C, GDD);
+- (2) the 5th percentile of minimum temperature (MinTemp);
+- (3) the 95th percentile of maximum temperature (MaxTemp);
+- (4) the annual mean temperature (MeanTemp).; 
+- (5) soil pH (pH);
+- (6) Nitrogen (N); 
+- (7) Phosphorus (P );
+- (8) soil moisture;
+- (9) tree canopy height;
+- (10) log distance from buildings  
+
+
+Load the environmental and species datasets
+```
+library(raster)
+list <- list.files(path = "C:/Users/jaso2605/Google Drive/Postdoc/Sweden/Project Sweden/Data SDM/ALL/new", pattern='.tif$', all.files=TRUE, full.names=FALSE)
+rfile_multi<-stack(list)
+envData<-brick(rfile_multi)
+#import presence-absence species data
+setwd("C:/Users/jaso2605/Google Drive/Postdoc/Sweden/Project Sweden/Data SDM/SDM_allsps")
+occData_carpinus <- read.csv("carpinus_alldata_nodup.csv")
+# make a SpatialPointsDataFrame object from data.frame
+occData_carpinus <- st_as_sf(occData_carpinus, coords = c("x", "y"), crs = crs(envData))
+# see the first few rows
+occData_carpinus
+```
+
+# For realized we also add dispersal limitation variable (propagule raster)
+##### Computes a negative exponential dispersal kernel to account for dispersal limitation (iForce) using iSDM package
+```
+library(sp)
+library(iSDM)
+
+occData_carpinus <- read.csv("carpinus_alldata_nodup.csv")
+coordinates(occData_carpinus) <- ~x + y
+proj4string(occData_carpinus) <- CRS(proj4string(envData))
+
+#produce a aggregate raster to run iForce
+soilagg<-aggregate(soil, fact=100, method='bilinear')
+#run iForce
+#a = 0.8 for long dispersal distance
+#a = 0.2 for restrict dispersal distance
+propagule08<-iForce(occData=occData_carpinus,envData=soilagg,a=0.8,binary=TRUE,longlat=FALSE) 
+
+#disaggregate to have a raster with 50m
+propagule08_disag<-disaggregate(propagule08, fact=100, method='bilinear')
+plot(propagule08_disag, col=bpy.colors(100))
+plot(occData_carpinus,col=ifelse(occData_carpinus@data[,1]==1,1,0),add=TRUE,cex=0.3)
+writeRaster(propagule08_disag, filename = "Propagule08_carpinus", format = "GTiff", overwrite = T)
+```
+
+##### Spatial block cross validation using blockCV package to separate training and testing sets
+
+###### spatial blocking by rows with systematic assignment
+```
+sb3 <- spatialBlock(speciesData = occData_carpinus,
+                    species = "Species",
+                    rasterLayer = envData,
+                    rows = 6,
+                    selection = "checkerboard",
+                    biomod2Format = TRUE)
+
+#adding points on spatialBlock plot
+library(ggplot2)
+sb3$plots + geom_sf(data = occData_carpinus, alpha = 0.5)
+```
+
+##### Preparing data to biomod2 modelling
+```
+library(biomod2)
+myRespName <- "Species"
+myResp <- as.numeric(occData_carpinus[,myRespName])
+myRespXY <- occData_carpinus[,c("x","y")]
+env <- stack(envData)
+```
+##### 1. Formatting Data
+```
+myBiomodData_carpinus <- BIOMOD_FormatingData(resp.var = myResp,
+                                     expl.var = env, # explanatory raster data
+                                     resp.xy = myRespXY,
+                                     resp.name = myRespName,
+                                     na.rm = F)
+```                                     
+##### 2. Defining the folds for DataSplitTable
+```
+DataSplitTable<-sb3$biomodTable
+```
+##### 3. Defining Models Options
+```
+myBiomodOption_carpinus <- BIOMOD_ModelingOptions(GLM = list(type = 'quadratic', interaction.level = 1), GBM = list(n.trees = 100), GAM = list(algo = 'GAM_mgcv', k = 4))
+```
+
+##### 4. Model fitting
+```
+myBiomodModelOut_carpinus <- BIOMOD_Modeling( myBiomodData_carpinus,
+                                     models = c('GLM','RF','GBM', 'GAM'),
+                                     models.options = myBiomodOption_carpinus,
+                                     DataSplitTable = DataSplitTable, # blocking folds
+                                     VarImport = 3,
+                                     NbRunEval= 5,
+                                     models.eval.meth = c('TSS','ROC', 'KAPPA'),
+                                     do.full.models=FALSE,
+                                     modeling.id="carpinus")
+
+   ```                                  
+##### 5. Model evaluation
+```
+#get all models evaluation
+myBiomodModelPred_carpinus <- get_predictions(myBiomodModelOut_carpinus)
+myBiomodModelPred_carpinus
+
+#write csv file with predictions to calculate the Continuous Boyce Index (CBI)
+write.csv(myBiomodModelPred_carpinus, 'myBiomodModelPred_carpinus.csv') 
+
+#evaluate Biomod models with the Boyce index for potential distribution
+pres.only.eval <- BIOMOD_presenceonly(myBiomodModelOut_carpinus)
+pres.only.eval$eval
+
+#plot evaluation scores - metrics for realized distribution
+models_scores_graph(myBiomodModelOut_oaks, by = "models",
+                    metrics = c ('ROC', 'TSS'), xlim = c(0.5,1), ylim = c(0.5,1))
+                    
+#calculate the mean of variable importance by algorithm
+(models_var_import_carpinus<-get_variables_importance(myBiomodModelOut_carpinus))
+apply(models_var_import_carpinus, c(1,2),mean)
+```
+##### After choosing the best model, run again using only the chosen model
+
+### SDM with the best model
+
+##### 4. Model fitting with one model without slipt data
+```
+myBiomodModelOut_carpinus <- BIOMOD_Modeling( myBiomodData_carpinus,
+                                            models = c('GAM'),
+                                            models.options = myBiomodOption_carpinus,
+                                            VarImport = 3,
+                                            do.full.models=FALSE,
+                                            modeling.id="carpinus")
+                                            
+###Visualization of the response curve of each variable in a model
+carpinus_gam <- BIOMOD_LoadModels(myBiomodModelOut_carpinus, models = 'GAM')
+
+gam_eval_strip <- biomod2::response.plot2(models = carpinus_gam, Data = get_formal_data(myBiomodModelOut_carpinus,
+                                                                                      'expl.var'), show.variables = get_formal_data(myBiomodModelOut_carpinus,
+                                                                                                                                    'expl.var.names'), do.bivariate = FALSE, fixed.var.metric = 'median',
+                                          legend = FALSE, display_title = FALSE, data_species = get_formal_data(myBiomodModelOut_carpinus, 'resp.var'))
+```
+##### 5. Projection to Sweden extention (present distribution)
+```
+myBiomodProjection_carpinus <- BIOMOD_Projection(modeling.output = myBiomodModelOut_carpinus,
+                                      new.env = env,
+                                      proj.name = 'Present',
+                                      selected.models = 'all',
+                                      compress = 'gzip',
+                                      clamping.mask = T,
+                                      output.format = '.grd',
+                                      build.clamping.mask = FALSE,
+                                      do.stack=T)
+
+mod_projPres <- get_predictions(myBiomodProjection_carpinus)
+presentResult <- calc(mod_projPres,fun = median) #Choose whatever descriptive statistic you'd like
+plot(presentResult)
+writeRaster(presentResult, filename = "carpinusPotential_GAM", format = "ascii", overwrite = T)
+
+```
+##### 6. Projection to future climatic conditions 
+```
+#load the future climatic variables (with the same name of the present variables) and stack all 
+
+bio12_370<- raster("C:/Users/jaso2605/Google Drive/Postdoc/Sweden/Project Sweden/Data SDM/futureclimate/future370_ok/chelsa12.tif")
+mat95_370<- raster("C:/Users/jaso2605/Google Drive/Postdoc/Sweden/Project Sweden/Data SDM/futureclimate/future370_ok/TMax95.tif")
+mit5_370<- raster("C:/Users/jaso2605/Google Drive/Postdoc/Sweden/Project Sweden/Data SDM/futureclimate/future370_ok/TMin5.tif")
+
+myExplFuture370 = raster::stack(distbuild, ph, soil, bio12_370, mat95_370, mit5_370)
+
+myBiomodProjectionFuture_carpinus_370 <- BIOMOD_Projection(modeling.output = myBiomodModelOut_carpinus,
+                                      new.env = myExplFuture370,
+                                      proj.name = 'future',
+                                      selected.models = 'all',
+                                      compress = 'gzip',
+                                      clamping.mask = T,
+                                      output.format = '.grd',
+                                      build.clamping.mask = FALSE,
+                                      do.stack=T)
+
+myBiomodProjectionFuture_carpinus_370
+mod_projFuture_370 <- get_predictions(myBiomodProjectionFuture_carpinus_370)
+futureResult_370 <- calc(mod_projFuture_370,fun = median) #Choose whatever descriptive statistic you'd like
+plot(futureResult_370)
+
+writeRaster(futureResult_370, filename = "carpinusFuture370_GAM", format = "ascii", overwrite = T)
+
+```
