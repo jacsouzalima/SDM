@@ -149,7 +149,7 @@ gam_eval_strip <- biomod2::response.plot2(models = carpinus_gam, Data = get_form
                                                                                                                                     'expl.var.names'), do.bivariate = FALSE, fixed.var.metric = 'median',
                                           legend = FALSE, display_title = FALSE, data_species = get_formal_data(myBiomodModelOut_carpinus, 'resp.var'))
 ```
-##### 5. Projection to Sweden extention (present distribution)
+##### 5. Projection to Sweden extention (current distribution)
 ```
 myBiomodProjection_carpinus <- BIOMOD_Projection(modeling.output = myBiomodModelOut_carpinus,
                                       new.env = env,
